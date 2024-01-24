@@ -1,0 +1,9 @@
+FROM python:3.8-slim
+
+WORKDIR /usr/src/app
+
+COPY loadbalancer.py .
+
+EXPOSE 5000
+
+CMD ["python", "./loadbalancer.py"]

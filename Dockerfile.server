@@ -1,0 +1,12 @@
+FROM python:3.8-slim
+
+WORKDIR /usr/src/app
+
+COPY server.py .
+
+# Set the server's ID via an environment variable
+ENV SERVER_ID=1
+
+EXPOSE 5000
+
+CMD ["python", "./server.py"]
