@@ -1,6 +1,8 @@
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import subprocess
+import re
+from urllib.parse import urlparse, parse_qs
 
 class ConsistentHashingWithProbing:
     def __init__(self, num_slots=512, num_servers=3, virtual_nodes_per_server=9):
@@ -21,8 +23,16 @@ class ConsistentHashingWithProbing:
             for j in range(self.virtual_nodes_per_server):
                 self.add_server(f"Server{i}_VN{j}")
 
+    def add_new_server(self,server_name):
+        for i in range(self.virtual_nodes_per_server):
+            self.add_server(server_name+f"_VN{i}")
+
     def add_server(self, server_name):
-        slot = hash(server_name) % self.num_slots
+        matches = re.findall(r'\d+', server_name)
+        i = int(matches[-2]) if matches else None
+        j = int(matches[-1]) if len(matches) > 1 else None
+        slot = self.hash_server(i,j)
+        # slot=hash(server_name)%self.num_slots
         while self.hash_map[slot] is not None:
             slot = (slot + 1) % self.num_slots
         self.hash_map[slot] = server_name
@@ -57,16 +67,21 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(response).encode('utf-8'))
 
     def do_GET(self):
+        parsed_url = urlparse(self.path)
+        query_params = parse_qs(parsed_url.query)
+        
         if self.path == '/get':
             servers = [server for server in consistent_hashing.hash_map if server is not None]
             self._send_response({"message": {"replicas": servers}, "status": "successful"})
-        else:
-            request_hash = hash(self.path)
-            server_name = consistent_hashing.get_server(request_hash)
+        elif 'query' in query_params:
+            request_id = int(query_params['query'][0])
+            server_name = consistent_hashing.get_server(request_id)
             if server_name:
                 self._send_response({"message": f"Request routed to server: {server_name}"})
             else:
                 self._send_response({"message": "Service unavailable"}, 503)
+        else:
+            self._send_response({"message": "Invalid request format"}, 400)
 
     def do_POST(self):
         if self.path == '/add':
@@ -74,7 +89,7 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
             post_data = json.loads(self.rfile.read(content_length))
             if 'n' in post_data and 'hostnames' in post_data and len(post_data['hostnames']) == post_data['n']:
                 for hostname in post_data['hostnames']:
-                    consistent_hashing.add_server(hostname)
+                    consistent_hashing.add_new_server(hostname)
                 self._send_response({"message": "Servers added successfully", "status": "successful"})
             else:
                 self._send_response({"message": "Incorrect number of hostnames or missing 'n'", "status": "failure"}, 400)
