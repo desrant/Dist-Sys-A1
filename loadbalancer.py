@@ -38,10 +38,10 @@ class ConsistentHashingWithProbing:
         self.hash_map[slot] = server_name
 
     def remove_server(self, server_name):
-        slot = hash(server_name) % self.num_slots
-        while self.hash_map[slot] != server_name:
-            slot = (slot + 1) % self.num_slots
-        self.hash_map[slot] = None
+        servers_to_remove = [server_name + f"_VN{i}" for i in range(self.virtual_nodes_per_server)]
+        for i in range(self.num_slots):
+            if self.hash_map[i] in servers_to_remove:
+                self.hash_map[i] = None
 
     def get_server(self, request_id):
         slot = self.hash_request(request_id)
