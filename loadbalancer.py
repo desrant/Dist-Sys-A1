@@ -31,17 +31,33 @@ class ConsistentHashingWithProbing:
         matches = re.findall(r'\d+', server_name)
         i = int(matches[-2]) if matches else None
         j = int(matches[-1]) if len(matches) > 1 else None
-        slot = self.hash_server(i,j)
-        # slot=hash(server_name)%self.num_slots
-        while self.hash_map[slot] is not None:
-            slot = (slot + 1) % self.num_slots
-        self.hash_map[slot] = server_name
+        slot = self.hash_server(i, j)
+        initial_slot = slot
+        while True:
+            if self.hash_map[slot] is None:  # Slot is empty
+                self.hash_map[slot] = server_name
+                return True  # Successfully added
+            elif self.hash_map[slot] == server_name:  # Server already exists
+                return False  # Indicate failure due to existing server
+            else:
+                slot = (slot + 1) % self.num_slots
+                if slot == initial_slot:  # We've looped all the way around
+                    break
+        return False  # Could not add the server (unlikely, but handles full hash_map case)
+
 
     def remove_server(self, server_name):
         servers_to_remove = [server_name + f"_VN{i}" for i in range(self.virtual_nodes_per_server)]
         for i in range(self.num_slots):
             if self.hash_map[i] in servers_to_remove:
                 self.hash_map[i] = None
+        self.ensure_minimum_servers()
+
+    def ensure_minimum_servers(self):
+        while len(self.server_names) < 4:
+            new_server_id = len(self.server_names)
+            new_server_name = f"Server{new_server_id}"
+            self.add_new_server(new_server_name)
 
     def get_server(self, request_id):
         slot = self.hash_request(request_id)
@@ -70,7 +86,7 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
         parsed_url = urlparse(self.path)
         query_params = parse_qs(parsed_url.query)
         
-        if self.path == '/get':
+        if self.path == '/rep':
             servers = [server for server in consistent_hashing.hash_map if server is not None]
             self._send_response({"message": {"replicas": servers}, "status": "successful"})
         elif 'query' in query_params:
