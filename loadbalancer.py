@@ -3,6 +3,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import subprocess
 import re
 from urllib.parse import urlparse, parse_qs
+import random
 
 class ConsistentHashingWithProbing:
     def __init__(self, num_slots=512, num_servers=3, virtual_nodes_per_server=9):
@@ -10,7 +11,6 @@ class ConsistentHashingWithProbing:
         self.hash_map = [None] * num_slots
         self.num_servers = num_servers
         self.virtual_nodes_per_server = virtual_nodes_per_server
-        self.act_servers=set()
         self.add_servers()
 
     def hash_request(self, i):
@@ -21,15 +21,12 @@ class ConsistentHashingWithProbing:
 
     def add_servers(self):
         for i in range(self.num_servers):
-            self.act_servers.add(f"Server{i}")
             for j in range(self.virtual_nodes_per_server):
                 self.add_server(f"Server{i}_VN{j}")
 
     def add_new_server(self,server_name):
-        if server_name not in self.active_servers:
-            self.act_servers.add(server_name)
-            for i in range(self.virtual_nodes_per_server):
-                self.add_server(server_name+f"_VN{i}")
+        for i in range(self.virtual_nodes_per_server):
+            self.add_server(server_name+f"_VN{i}")
 
     def add_server(self, server_name):
         matches = re.findall(r'\d+', server_name)
@@ -37,29 +34,44 @@ class ConsistentHashingWithProbing:
         j = int(matches[-1]) if len(matches) > 1 else None
         slot = self.hash_server(i,j)
         # slot=hash(server_name)%self.num_slots
-        while self.hash_map[slot] is not None:
-            if self.hash_map[slot]!=server_name:
+        slot = self.hash_server(i, j)
+        initial_slot = slot
+        while True:
+            if self.hash_map[slot] is None:  # Slot is empty
+                self.hash_map[slot] = server_name
+                return True  # Successfully added
+            elif self.hash_map[slot] == server_name:  # Server already exists
+                return False  # Indicate failure due to existing server
+            else:
                 slot = (slot + 1) % self.num_slots
-            else :
-                self.send_response(409)
-                break
-        self.hash_map[slot] = server_name
-
+                if slot == initial_slot:  # We've looped all the way around
+                    break
+        return False  # Could not add the server (unlikely, but handles full hash_map case)
 
     def remove_server(self, server_name):
-        if(server_name in self.act_servers):
-            servers_to_remove = [server_name + f"_VN{i}" for i in range(self.virtual_nodes_per_server)]
-            for i in range(self.num_slots):
-                if self.hash_map[i] in servers_to_remove:
-                    self.hash_map[i] = None
-            self.ensure_minimum_servers()
+        servers_to_remove = [server_name + f"_VN{i}" for i in range(self.virtual_nodes_per_server)]
+        for i in range(self.num_slots):
+            if self.hash_map[i] in servers_to_remove:
+                self.hash_map[i] = None
+        self.ensure_minimum_servers()
 
     def ensure_minimum_servers(self):
-        while len(self.server_names) < 4:
-            new_server_id = len(self.server_names)
+        while len(set(self.get_server_names())) < 3:
+            new_server_id = self.find_next_available_server_id()
             new_server_name = f"Server{new_server_id}"
             self.add_new_server(new_server_name)
 
+    def find_next_available_server_id(self):
+        existing_ids = {int(server.split('Server')[1].split('_')[0]) for server in self.hash_map if server is not None}
+        next_id = 0
+        while next_id in existing_ids:
+            next_id += 1
+        return next_id
+
+    def get_server_names(self):
+        # Extract and return the unique base server names from the hash_map
+        return [server.split("_VN")[0] for server in self.hash_map if server is not None]
+    
     def get_server(self, request_id):
         slot = self.hash_request(request_id)
         while self.hash_map[slot] is None and slot < self.num_slots:
@@ -88,19 +100,13 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
         query_params = parse_qs(parsed_url.query)
         
         if self.path == '/rep':
-            servers = [server for server in consistent_hashing.act_servers]
-            self._send_response({"Number of servers": len(consistent_hashing.act_servers),"message": {"replicas": servers}, "status": "successful"})
-        elif 'query' in query_params:
-            request_id = int(query_params['query'][0])
-            server_name = consistent_hashing.get_server(request_id)
-            if server_name:
-                self._send_response({"message": f"Request routed to server: {server_name}"})
-            else:
-                self._send_response({"message": "Service unavailable"}, 503)
-        else:
-            self._send_response({"message": "Invalid request format"}, 400)
-
-            
+            # Extract server names without virtual nodes
+            servers_with_vn = [server for server in consistent_hashing.hash_map if server is not None]
+            unique_servers = set()  # Use a set to store unique server names
+            for server in servers_with_vn:
+                base_server_name = server.split("_VN")[0]  # Split by "_VN" and take the first part
+                unique_servers.add(base_server_name)
+            self._send_response({"message": {"N": len(unique_servers),"replicas": list(unique_servers)}, "status": "successful"})
 
     def do_POST(self):
         if self.path == '/add':
