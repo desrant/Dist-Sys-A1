@@ -7,43 +7,31 @@ services:
       dockerfile: Dockerfile.loadbalancer
     container_name: load_balancer
     ports:
-      - "5000:5000" # Port mapping for the load balancer
+      - "5000:5000" # Expose port 5000 for the load balancer service to receive requests
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Mount the Docker socket to manage containers
-    privileged: true # Grant privileges to manage Docker
+      
+    privileged: true
     environment:
-      - SERVER_ID=load_balancer # Environment variable for the load balancer
-    depends_on:
-      - server_1
-      - server_2
-      - server_3
+      - SERVER_IMAGE_NAME=dist-sys-a1-test-server # Specify the Docker image for the server containers
+      - SERVER_ID=load_balancer
+    networks:
+      - my_network
 
-  server_1:
+  server:
     build:
       context: .
       dockerfile: Dockerfile.server
+    container_name: Server1
     environment:
       - SERVER_ID=server_1
     networks:
       - my_network
 
-  server_2:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-    environment:
-      - SERVER_ID=server_2
-    networks:
-      - my_network
 
-  server_3:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-    environment:
-      - SERVER_ID=server_3
-    networks:
-      - my_network
+
+
+
 
 networks:
   my_network:
