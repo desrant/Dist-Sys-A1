@@ -4,14 +4,14 @@ import subprocess
 import re
 from urllib.parse import urlparse, parse_qs
 import random
-
+import requests
 import docker
 import os
 
 client = docker.from_env()
 server_image_name = os.getenv('SERVER_IMAGE_NAME', 'dist-sys-a1-test-server')
 
-def up_server_container(server_name):
+def up_server_container(server_name,host_port):
     container_name = server_name
     
     try:
@@ -25,14 +25,16 @@ def up_server_container(server_name):
     except docker.errors.NotFound:
         # If container does not exist, create and start it
         try:
+            
             container = client.containers.run(
-                                                server_image_name, 
-                                                name=container_name, 
-                                                detach=True, 
-                                                environment=["SERVER_ID=" + server_name], 
-                                                volumes={'/var/run/docker.sock': {'bind': '/var/run/docker.sock', 'mode': 'rw'}}, 
-                                                network='my_network'
-                        )
+                server_image_name,
+                name=container_name,
+                detach=True,
+                ports={str(8000): str(host_port)},
+                environment=["SERVER_ID=" + server_name],
+                network='my_network'
+                )
+
             container.start()
             print(f"Container {container_name} created and started.")
         except docker.errors.ContainerError as e:
@@ -90,7 +92,7 @@ class ConsistentHashingWithProbing:
 
     def add_servers(self):
         for i in range(self.num_servers):
-            up_server_container(f"Server{i}")
+            up_server_container(f"Server{i}",8000+int(i))
             for j in range(self.virtual_nodes_per_server):
                 self.add_server(f"Server{i}_VN{j}")
 
@@ -170,15 +172,42 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_url = urlparse(self.path)
         query_params = parse_qs(parsed_url.query)
-        if self.path=='/home':
+        
+        # Assuming /home and /heartbeat are paths that should be redirected
+        if self.path in ['/home', '/heartbeat']:
+            
             consistent_hashing.request_id+=1
             server = consistent_hashing.get_server(consistent_hashing.request_id)
-            self._send_response({"message":{"Server is": server},"status":"successful"})
+            # Construct the target server URL based on the server name
+            # This example assumes you have a way to resolve server_name to an actual URL or IP address
+            # You might need a service registry or a static mapping to achieve this
+            match = re.search(r"Server(\d+)_VN\d+", server) 
 
-        if self.path=='/heartbeat':
-            consistent_hashing.request_id+=1
-            server = consistent_hashing.get_server(consistent_hashing.request_id)
-            self._send_response({"message":{"Server is": server},"status":"successful"})
+            port = int(match.group(1))+8000 if match else 8000
+
+            target_url = f'http://host.docker.internal:{port}{self.path}'
+            
+            try:
+                # Forward the request to the target server
+                consistent_hashing.add_servers()
+                response = requests.get(target_url)
+                
+                # Send the response back to the client
+                self.send_response(response.status_code)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(response.content)
+            except requests.exceptions.RequestException as e:
+                self.send_error(502, message=str(e))
+            return
+        # if self.path=='/home':
+        #     
+            
+
+        # if self.path=='/heartbeat':
+        #     consistent_hashing.request_id+=1
+        #     server = consistent_hashing.get_server(consistent_hashing.request_id)
+        #     self._send_response({"message":{"Server is": server},"status":"successful"})
 
         if self.path == '/rep':
             # Extract server names without virtual nodes
