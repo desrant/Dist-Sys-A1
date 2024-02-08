@@ -16,14 +16,13 @@ def up_server_container(server_name,host_port):
     
     try:
         container = client.containers.get(container_name)
-        # If container exists but stopped, start it
         if container.status == 'exited':
             print(f"Existing container {container_name} logs before restart:")
-            print(container.logs().decode('utf-8'))  # Inspect why it might have exited
+            print(container.logs().decode('utf-8'))  
             container.start()
             print(f"Container {container_name} started.")
     except docker.errors.NotFound:
-        # If container does not exist, create and start it
+        
         try:
             
             container = client.containers.run(
@@ -53,7 +52,7 @@ def up_server_container(server_name,host_port):
 
 def down_server_container(server_name):
     
-    container_name = f"{server_name}_container"
+    container_name = server_name
     try:
         container = client.containers.get(container_name)
         if container.status in ['running', 'paused']:
@@ -105,20 +104,20 @@ class ConsistentHashingWithProbing:
         i = int(matches[-2]) if matches else None
         j = int(matches[-1]) if len(matches) > 1 else None
         slot = self.hash_server(i,j)
-        # slot=hash(server_name)%self.num_slots
+        
         slot = self.hash_server(i, j)
         initial_slot = slot
         while True:
-            if self.hash_map[slot] is None:  # Slot is empty
+            if self.hash_map[slot] is None:  
                 self.hash_map[slot] = server_name
-                return True  # Successfully added
-            elif self.hash_map[slot] == server_name:  # Server already exists
-                return False  # Indicate failure due to existing server
+                return True  
+            elif self.hash_map[slot] == server_name:  
+                return False  
             else:
                 slot = (slot + 1) % self.num_slots
-                if slot == initial_slot:  # We've looped all the way around
+                if slot == initial_slot:  
                     break
-        return False  # Could not add the server (unlikely, but handles full hash_map case)
+        return False  
 
     def remove_server(self, server_name):
         servers_to_remove = [server_name + f"_VN{i}" for i in range(self.virtual_nodes_per_server)]
@@ -131,9 +130,10 @@ class ConsistentHashingWithProbing:
         while len(set(self.get_server_names())) < 3:
             new_server_id = self.find_next_available_server_id()
             new_server_name = f"Server{new_server_id}"
+            host_port=5000+int(new_server_id)
+            up_server_container(new_server_name,host_port)
             self.add_new_server(new_server_name)
-            up_server_container(new_server_name)
-
+            
     def find_next_available_server_id(self):
         existing_ids = {int(server.split('Server')[1].split('_')[0]) for server in self.hash_map if server is not None}
         next_id = 0
@@ -200,14 +200,6 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
             except requests.exceptions.RequestException as e:
                 self.send_error(502, message=str(e))
             return
-        # if self.path=='/home':
-        #     
-            
-
-        # if self.path=='/heartbeat':
-        #     consistent_hashing.request_id+=1
-        #     server = consistent_hashing.get_server(consistent_hashing.request_id)
-        #     self._send_response({"message":{"Server is": server},"status":"successful"})
 
         if self.path == '/rep':
             # Extract server names without virtual nodes
@@ -225,7 +217,10 @@ class LoadBalancerHandler(BaseHTTPRequestHandler):
             if 'n' in post_data and 'hostnames' in post_data and len(post_data['hostnames']) == post_data['n']:
                 for hostname in post_data['hostnames']:
                     consistent_hashing.add_new_server(hostname)
-                    up_server_container(hostname)
+                    match = re.search(r"Server(\d+)", hostname) 
+
+                    port = int(match.group(1))+8000 if match else 8000
+                    up_server_container(hostname,port)
                 self._send_response({"message": "Servers added successfully", "status": "successful"})
             else:
                 self._send_response({"message": "Incorrect number of hostnames or missing 'n'", "status": "failure"}, 400)
