@@ -16,23 +16,22 @@ services:
       - SERVER_IMAGE_NAME=dist-sys-a1-test-server # Specify the Docker image for the server containers
       - SERVER_ID=load_balancer
     networks:
-      - my_network
+      - d1_my_network
 
   server:
     build:
       context: .
       dockerfile: Dockerfile.server
-    container_name: Server1
+    container_name: Server0
+    ports:
+      - "8000:8000"
     environment:
-      - SERVER_ID=server_1
+      - SERVER_ID=Server0
     networks:
-      - my_network
-
-
-
-
+      - d1_my_network
 
 
 networks:
-  my_network:
+  d1_my_network:
+    name: d1_my_network
     driver: bridge
