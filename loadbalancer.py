@@ -3,9 +3,9 @@ import docker
 import os
 import re
 import requests
-
+import json
 app = Flask(__name__)
-
+import mysql.connector
 # Setup Docker client
 client = docker.from_env()
 server_image_name = os.getenv('SERVER_IMAGE_NAME', 'dist-sys-a1-test-server')
@@ -30,9 +30,17 @@ def up_server_container(server_name,host_port):
                 name=container_name,
                 detach=True,
                 ports={str(8000): str(host_port)},
-                environment=["SERVER_ID=" + server_name],
+                environment=[
+                    "SERVER_ID=" + server_name,
+                    "MYSQL_HOST=dist-sys-a1-test-db-1",
+                    "MYSQL_ROOT_PASSWORD=rootpassword"
+                ],
+                mem_limit='200m',
+                cpu_quota=int(0.2 * 100000),  # Equivalent to 20% of CPU
                 network='d1_my_network'
-                )
+            )
+
+
 
             container.start()
             print(f"Container {container_name} created and started.")
@@ -157,8 +165,106 @@ class ConsistentHashingWithProbing:
 
 consistent_hashing = ConsistentHashingWithProbing()
 
-# Flask route for handling /home and /heartbeat with GET method
-@app.route('/home', methods=['GET'])
+MYSQL_HOST = os.environ.get('MYSQL_HOST', 'dist-sys-a1-test-db-1')
+MYSQL_USER = os.environ.get('MYSQL_USER', 'root')
+MYSQL_PASSWORD = os.environ.get('MYSQL_ROOT_PASSWORD')
+
+def db_connect():
+    # Connect to MySQL without specifying a database
+    connection = mysql.connector.connect(
+        host=MYSQL_HOST,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD
+    )
+    cursor = connection.cursor()
+
+    # Check if the 'datashards' database exists
+    cursor.execute("SHOW DATABASES LIKE 'datashards'")
+    result = cursor.fetchone()
+
+    # If the 'datashards' database does not exist, create it
+    if not result:
+        cursor.execute("CREATE DATABASE datashards")
+        print("Database 'datashards' created successfully.")
+
+    cursor.close()
+    connection.close()
+
+    # Reconnect to MySQL, this time to the 'datashards' database specifically
+    connection = mysql.connector.connect(
+        host=MYSQL_HOST,
+        user=MYSQL_USER,
+        password=MYSQL_PASSWORD,
+        database='datashards'
+    )
+    return connection
+
+def initialize_shardT_and_mapT():
+    db = db_connect()
+    cursor = db.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ShardT (
+            Stud_id_low INT PRIMARY KEY,
+            Shard_id VARCHAR(255),
+            Shard_size INT,
+            valid_idx INT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MapT (
+            Shard_id VARCHAR(255),
+            Server_id VARCHAR(255),
+            PRIMARY KEY (Shard_id, Server_id)
+        )
+    """)
+    db.commit()
+    cursor.close()
+    db.close()
+
+@app.route('/init', methods=['POST'])
+def handle_init():
+    data = request.json
+    db = db_connect()
+    cursor = db.cursor()
+    initialize_shardT_and_mapT()
+    print(json.dumps(data, indent=4))
+    # Initialize ShardT and MapT tables with the received configuration
+    for shard in data.get('shards', []):
+        cursor.execute("INSERT INTO ShardT (Stud_id_low, Shard_id, Shard_size, valid_idx) VALUES (%s, %s, %s, %s) ON DUPLICATE KEY UPDATE Shard_size = VALUES(Shard_size)",
+                       (shard['Stud_id_low'], shard['Shard_id'], shard['Shard_size'], 0))
+
+    for server_id, shard_ids in data.get('servers', {}).items():
+        for shard_id in shard_ids:
+            cursor.execute("INSERT INTO MapT (Shard_id, Server_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE Server_id = VALUES(Server_id)",
+                           (shard_id, server_id))
+    for server_name, shards in data.get('servers', {}).items():
+        # Create a new JSON object with the server name as the key and the shards list as the value
+        new_json = {"schema": data.get('schema',{}),
+                    "shards": shards
+                    }
+    
+        match = re.search(r"Server(\d+)", server_name)
+        port = int(match.group(1)) + 8000 if match else 8000
+        url = f'http://host.docker.internal:{port}/config'
+        response = requests.post(url, json=new_json)  # Set timeout to 30 seconds
+
+
+        # Check response status and act accordingly
+        if response.status_code == 200:
+            print(f"Successfully sent data for {server_name}")
+        else:
+            print(f"Failed to send data for {server_name}: {response.status_code}")
+
+        
+        
+    db.commit()
+    cursor.close()
+    db.close()
+    
+    return jsonify({"message": "Configured Database", "status": "success"}), 200
+
+
+
 @app.route('/heartbeat', methods=['GET'])
 def handle_get_request():
     consistent_hashing.request_id+=1
