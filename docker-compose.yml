@@ -1,6 +1,16 @@
 version: '3.8'
 
 services:
+  db:
+    image: mysql:5.7
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./sql:/docker-entrypoint-initdb.d
+    networks:
+      - d1_my_network
+
   load_balancer:
     build:
       context: .
@@ -8,13 +18,20 @@ services:
     container_name: load_balancer
     ports:
       - "5000:5000" # Expose port 5000 for the load balancer service to receive requests
+    
+    mem_limit: 200m
+    cpus: 0.2
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Mount the Docker socket to manage containers
       
     privileged: true
     environment:
+      - MYSQL_HOST=dist-sys-a1-test-db-1
+      - MYSQL_ROOT_PASSWORD=rootpassword
       - SERVER_IMAGE_NAME=dist-sys-a1-test-server # Specify the Docker image for the server containers
       - SERVER_ID=load_balancer
+    depends_on:
+      - db
     networks:
       - d1_my_network
 
@@ -26,12 +43,23 @@ services:
     ports:
       - "8000:8000"
     environment:
+      - MYSQL_HOST=dist-sys-a1-test-db-1
+      - MYSQL_ROOT_PASSWORD=rootpassword
       - SERVER_ID=Server0
+    depends_on:
+      - db
+    mem_limit: 200m
+    cpus: 0.2
     networks:
       - d1_my_network
 
+
+volumes:
+  db-data:
 
 networks:
   d1_my_network:
     name: d1_my_network
     driver: bridge
+
+
